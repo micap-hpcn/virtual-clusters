@@ -4,12 +4,12 @@ Description: Deploy an example Slurm headnode with the AWS plugin for Slurm (ver
 Parameters:
   SlurmPackageUrl:
     Type: String
-    Default: https://download.schedmd.com/slurm/slurm-20.02-latest.tar.bz2
+    Default: https://download.schedmd.com/slurm/slurm-20.11-latest.tar.bz2
     Description: URL to the Slurm installation package. The filename must be like slurm-*.tar.bz2
 
   PluginPrefixUrl:
     Type: String
-    Default: https://github.com/aws-samples/aws-plugin-for-slurm/raw/plugin-v2/
+    Default: https://raw.githubusercontent.com/aws-samples/aws-plugin-for-slurm/plugin-v2/
     Description: Path to the plugin files
 
   VpcId:

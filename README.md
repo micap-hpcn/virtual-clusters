@@ -28,10 +28,11 @@ AWS CloudFormation is used to provision the pre-configured head node. To proceed
 
 The stack will create the following resources:
 
-* Two IAM policies to grant the necessary permissions to the head and compute nodes. These policies are attached as inline policies to the predefined IAM role `LabRole`, which is generally available in AWS Academy Learner Labs. Due to the limitations of IAM in these labs, it is required to manually enable the creation of these policies the first time the template is used.
+* Two IAM policies to grant the necessary permissions to the head and compute nodes. These policies are attached as inline policies to the predefined IAM role `LabRole`, which is generally available in AWS Academy Learner 
+Labs. Due to the limitations of IAM in these labs, it is required to manually enable the creation of these policies the first time the template is used.
 * A security group that allows SSH traffic from the Internet and traffic between Slurm nodes
 * A launch template that will be used to launch compute nodes
-* A placement group. The creation of this resource is optional. It can be used to launch all the compute nodes inside the same placement group.
+* A placement group. The creation of this resource is optional. IMPORTANT NOTICE: do NOT use placement groups because they are not supported in AWS Academy Learner Labs.  
 * The head node. The stack returns the instance ID of the head node.
 
 The plugin is configured with a single partition `aws` and a single node group `node` that contains up to 8 instances launched in on-demand mode.
