@@ -14,19 +14,15 @@ Parameters:
 
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC where the headnode and the compute nodes will be launched
+    Description: VPC where the cluster nodes will be launched
 
-  Subnet1Id:
+  HeadNodeSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Subnet in the VPC where the headnode and the compute nodes will be launched. Must be a public subnet or a private subnet with a default route to NAT
+    Description: Subnet in the VPC where the headnode will be launched
 
-  UsePlacementGroup:
-    Type: String
-    Default: No
-    Description: Option to select wether or not to launch the compute nodes within a placement group
-    AllowedValues: 
-      - No
-      - Yes
+  ComputeNodeSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'Subnets in the VPC where the compute nodes will be launched. VERY IMPORTANT: select only one to emulate the use of a placement group for an HPC cluster, otherwise select all'
 
   KeyPair:
     Type: AWS::EC2::KeyPair::KeyName
@@ -54,7 +50,7 @@ Parameters:
   FirstVirtualCluster:
     Type: String
     Default: No
-    Description: "VERY IMPORTANT: choose TRUE only the first time you use this template to create a virtual cluster"
+    Description: 'VERY IMPORTANT: choose TRUE only the first time you use this template to create a virtual cluster'
     AllowedValues: 
       - No
       - Yes
@@ -70,8 +66,8 @@ Metadata:
           default: Network
         Parameters: 
           - VpcId
-          - Subnet1Id
-          - UsePlacementGroup
+          - HeadNodeSubnetId
+          - ComputeNodeSubnetIds
       - Label: 
           default: Instances
         Parameters: 
@@ -90,10 +86,10 @@ Metadata:
         default: Create IAM Node Policies
       VpcId: 
         default: VPC ID
-      Subnet1Id: 
-        default: Subnet ID
-      UsePlacementGroup:
-        default: Use a Placement Group
+      HeadNodeSubnetId: 
+        default: Headnode Subnet ID
+      ComputeNodeSubnetIds: 
+        default: Compute Node Subnet IDs
       HeadNodeInstanceType: 
         default: Headnode Instance Type
       ComputeNodeInstanceType: 
@@ -109,8 +105,19 @@ Metadata:
       PluginPrefixUrl: 
         default: Plugin URL Prefix
 
-Conditions: 
-  CreatePlacementGroup: !Equals [ !Ref UsePlacementGroup, Yes ]
+Transform: AWS::LanguageExtensions
+
+Conditions:
+  OneSubnet: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 1 ]
+  TwoSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 2 ]
+  ThreeSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 3 ]
+  FourSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 4 ]
+  FiveSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 5 ]
+  SixSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 6 ]
+  NotSixSubnets: !Not [ !Condition SixSubnets ]
+  LessThanThreeSubnets: !Or [ !Condition OneSubnet, !Condition TwoSubnets ]
+  LessThanFourSubnets: !Or [ !Condition OneSubnet, !Condition TwoSubnets, !Condition ThreeSubnets ]
+  LessThanFiveSubnets: !Not [ !Or [ !Condition FiveSubnets, !Condition SixSubnets ] ]
   CreateNodePolicies: !Equals [ !Ref FirstVirtualCluster, Yes ]
 
 Resources:
@@ -188,13 +195,7 @@ Resources:
     Properties: 
       GroupSet: 
         - !GetAtt [ SecurityGroup, GroupId ]
-      SubnetId: !Ref Subnet1Id
-
-  PlacementGroup:
-    Type: AWS::EC2::PlacementGroup
-    Condition: CreatePlacementGroup
-    Properties:
-      Strategy: cluster
+      SubnetId: !Ref HeadNodeSubnetId
 
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -204,12 +205,6 @@ Resources:
         ImageId: !Ref LatestAmiId
         IamInstanceProfile:
           Arn: !GetAtt [ ComputeNodeInstanceProfile, Arn ]
-        Placement:
-          GroupName: 
-            Fn::If:
-            - CreatePlacementGroup
-            - !Ref PlacementGroup
-            - !Ref AWS::NoValue
         SecurityGroupIds:
           - !GetAtt [ SecurityGroup, GroupId ]
         UserData:
@@ -253,10 +248,11 @@ Resources:
           DeviceIndex: 0
       Tags:
         - Key: Name
-          Value: headnode
-      UserData:
-          Fn::Base64:
-            !Sub |
+          Value: !Join [ "-", [ !Ref AWS::StackName, "headnode" ] ]
+      UserData: 
+        Fn::Base64:
+          !Sub
+            - |
               #!/bin/bash -x
               # Install packages
               yum update -y
@@ -334,38 +330,15 @@ Resources:
               cat > $SLURM_HOME/etc/aws/partitions.json <<'EOF'
               {
                  "Partitions": [
-                    {
+                   {
                        "PartitionName": "aws",
                        "NodeGroups": [
-                          {
-                             "NodeGroupName": "node",
-                             "MaxNodes": 8,
-                             "Region": "${AWS::Region}",
-                             "SlurmSpecifications": {
-                                "CPUs": "${ComputeNodeCPUs}"
-                             },
-                             "PurchasingOption": "on-demand",
-                             "OnDemandOptions": {
-                                 "AllocationStrategy": "lowest-price"
-                             },
-                             "LaunchTemplateSpecification": {
-                                "LaunchTemplateId": "${LaunchTemplate}",
-                                "Version": "$Latest"
-                             },
-                             "LaunchTemplateOverrides": [
-                                {
-                                   "InstanceType": "${ComputeNodeInstanceType}"
-                                }
-                             ],
-                             "SubnetIds": [
-                                "${Subnet1Id}"
-                             ]
-                          }
+                         ${NodeGroups}
                        ],
                        "PartitionOptions": {
                           "Default": "Yes"
                        }
-                    }
+                   }
                  ]
               }
               EOF
@@ -483,6 +456,204 @@ Resources:
               systemctl start slurmctld
 
               /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource HeadNodeInstance --region ${AWS::Region}
+            - NodeGroups:
+                !Join
+                  - ','
+                  - - !Sub
+                        - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone1",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                              }
+                        - NumberOfNodes: !If [ OneSubnet, 8, 1 ]
+                          Weight: 1
+                          SubnetId: !Select [ 0, !Ref ComputeNodeSubnetIds ]
+                    - !If
+                      - OneSubnet
+                      - !Ref AWS::NoValue
+                      - !Sub
+                          - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone2",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                               }
+                          - NumberOfNodes: !If [ TwoSubnets, 7, 1 ]
+                            Weight: !If [ TwoSubnets, 2, 1 ]
+                            SubnetId: !Select [ 1, !Ref ComputeNodeSubnetIds ]
+                    - !If
+                      - LessThanThreeSubnets
+                      - !Ref AWS::NoValue
+                      - !Sub
+                          - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone3",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                               }
+                          - NumberOfNodes: !If [ ThreeSubnets, 6, 1 ]
+                            Weight: !If [ ThreeSubnets, 2, 1 ]
+                            SubnetId: !Select [ 2, !Ref ComputeNodeSubnetIds ]
+                    - !If
+                      - LessThanFourSubnets
+                      - !Ref AWS::NoValue
+                      - !Sub
+                          - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone4",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                               }
+                          - NumberOfNodes: !If [ FourSubnets, 5, 1 ]
+                            Weight: !If [ FourSubnets, 2, 1 ]
+                            SubnetId: !Select [ 3, !Ref ComputeNodeSubnetIds ]
+                    - !If
+                      - LessThanFiveSubnets
+                      - !Ref AWS::NoValue
+                      - !Sub
+                          - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone5",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                               }
+                          - NumberOfNodes: !If [ FiveSubnets, 4, 2 ]
+                            Weight: 2
+                            SubnetId: !Select [ 4, !Ref ComputeNodeSubnetIds ]
+                    - !If
+                      - NotSixSubnets
+                      - !Ref AWS::NoValue
+                      - !Sub
+                          - |
+                              {
+                                  "NodeGroupName": "${AWS::StackName}NodeZone6",
+                                  "MaxNodes": ${NumberOfNodes},
+                                  "Region": "${AWS::Region}",
+                                  "SlurmSpecifications": {
+                                     "CPUs": "${ComputeNodeCPUs}",
+                                     "Weight": "${Weight}"
+                                  },
+                                  "PurchasingOption": "on-demand",
+                                  "OnDemandOptions": {
+                                      "AllocationStrategy": "lowest-price"
+                                  },
+                                  "LaunchTemplateSpecification": {
+                                     "LaunchTemplateId": "${LaunchTemplate}",
+                                     "Version": "$Latest"
+                                  },
+                                  "LaunchTemplateOverrides": [
+                                     {
+                                        "InstanceType": "${ComputeNodeInstanceType}"
+                                     }
+                                  ],
+                                  "SubnetIds": [
+                                     "${SubnetId}"
+                                  ]
+                               }
+                          - NumberOfNodes: 2
+                            Weight: 3
+                            SubnetId: !Select [ 5, !Ref ComputeNodeSubnetIds ]
     CreationPolicy:
       ResourceSignal:
         Timeout: PT15M
