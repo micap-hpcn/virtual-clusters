@@ -1,32 +1,23 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy an example Slurm headnode with the AWS plugin for Slurm (version 2)
+Description: Deploy a cluster managed with Slurm
 
 Parameters:
   SlurmPackageUrl:
     Type: String
-    Default: https://download.schedmd.com/slurm/slurm-20.11-latest.tar.bz2
+    Default: https://download.schedmd.com/slurm/slurm-22.05-latest.tar.bz2
     Description: URL to the Slurm installation package. The filename must be like slurm-*.tar.bz2
-
-  PluginPrefixUrl:
-    Type: String
-    Default: https://raw.githubusercontent.com/aws-samples/aws-plugin-for-slurm/plugin-v2/
-    Description: Path to the plugin files
 
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC where the cluster nodes will be launched
 
-  HeadNodeSubnetId:
-    Type: AWS::EC2::Subnet::Id
-    Description: Subnet in the VPC where the headnode will be launched
-
-  ComputeNodeSubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: 'Subnets in the VPC where the compute nodes will be launched. VERY IMPORTANT: select only one to emulate the use of a placement group for an HPC cluster, otherwise select all'
+  HeadNodeAZ:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: Availability Zone where the head node will be launched
 
   KeyPair:
     Type: AWS::EC2::KeyPair::KeyName
-    Description: Key pair that will be used to launch instances
+    Description: Key pair that will be used to launch the cluster instances
 
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -35,45 +26,40 @@ Parameters:
   HeadNodeInstanceType:
     Type: String
     Default: c5.large
-    Description: Instance type to use to launch the head node
+    Description: Instance type of the head node
 
   ComputeNodeInstanceType:
     Type: String
     Default: c5.large
-    Description: Instance type to use to launch the compute node
+    Description: Instance type of the compute nodes
 
-  ComputeNodeCPUs:
+  ComputeNodesAmount:
     Type: Number
     Default: 2
-    Description: Number of vCPUs for the compute node instance type
-
-  FirstVirtualCluster:
+    AllowedValues: [1, 2, 3, 4, 5, 6, 7, 8]
+    Description: "Number of compute nodes (min: 1, max: 8)"
+    
+  HPCOrHTC:
     Type: String
-    Default: No
-    Description: 'VERY IMPORTANT: choose TRUE only the first time you use this template to create a virtual cluster'
-    AllowedValues: 
-      - No
-      - Yes
-
+    Default: HPC
+    AllowedValues: [HPC, HTC]
+    Description: "Cluster type (HPC or HTC). HPC: compute nodes are launched in the same AZ of the head node. HTC: compute nodes are launched in different AZs assigned using a round-robin policy."
+    
 Metadata: 
   AWS::CloudFormation::Interface: 
-    ParameterGroups: 
-      - Label:
-          default: IAM Policies
-        Parameters: 
-          - FirstVirtualCluster
+    ParameterGroups:
       - Label: 
           default: Network
-        Parameters: 
+        Parameters:
           - VpcId
-          - HeadNodeSubnetId
-          - ComputeNodeSubnetIds
-      - Label: 
+          - HeadNodeAZ
+          - HPCOrHTC
+      - Label:
           default: Instances
-        Parameters: 
+        Parameters:
           - HeadNodeInstanceType
           - ComputeNodeInstanceType
-          - ComputeNodeCPUs
+          - ComputeNodesAmount
           - KeyPair
           - LatestAmiId
       - Label: 
@@ -81,44 +67,55 @@ Metadata:
         Parameters: 
           - SlurmPackageUrl
           - PluginPrefixUrl
-    ParameterLabels: 
-      FirstVirtualCluster:
-        default: Create IAM Node Policies
+    ParameterLabels:
       VpcId: 
         default: VPC ID
-      HeadNodeSubnetId: 
-        default: Headnode Subnet ID
-      ComputeNodeSubnetIds: 
-        default: Compute Node Subnet IDs
-      HeadNodeInstanceType: 
-        default: Headnode Instance Type
+      HeadNodeAZ:
+        default: Head node AZ
+      HPCOrHTC:
+        default: HPC or HTC cluster
+      HeadNodeInstanceType:
+        default: Head node instance type
       ComputeNodeInstanceType: 
-        default: Compute Node Instance Type
-      ComputeNodeCPUs: 
-        default: Compute Node vCPUs
+        default: Compute node instance type
+      ComputeNodesAmount:
+        default: Number of compute nodes
       KeyPair: 
-        default: Key Pair
+        default: Key pair
       LatestAmiId: 
         default: Latest Amazon Linux 2 AMI ID
       SlurmPackageUrl: 
-        default: Slurm Package URL
+        default: Slurm package URL
       PluginPrefixUrl: 
-        default: Plugin URL Prefix
+        default: Plugin URL prefix
 
 Transform: AWS::LanguageExtensions
 
 Conditions:
-  OneSubnet: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 1 ]
-  TwoSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 2 ]
-  ThreeSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 3 ]
-  FourSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 4 ]
-  FiveSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 5 ]
-  SixSubnets: !Equals [ Fn::Length: !Ref ComputeNodeSubnetIds, 6 ]
-  NotSixSubnets: !Not [ !Condition SixSubnets ]
-  LessThanThreeSubnets: !Or [ !Condition OneSubnet, !Condition TwoSubnets ]
-  LessThanFourSubnets: !Or [ !Condition OneSubnet, !Condition TwoSubnets, !Condition ThreeSubnets ]
-  LessThanFiveSubnets: !Not [ !Or [ !Condition FiveSubnets, !Condition SixSubnets ] ]
-  CreateNodePolicies: !Equals [ !Ref FirstVirtualCluster, Yes ]
+  IsHPCCluster: !Equals [ !Ref HPCOrHTC, HPC ]
+#  Never: !Equals [ 0, 1 ]
+
+Mappings:
+  ComputeNodesData:
+    Identifiers:
+      "1": ["0"]
+      "2": ["0", "1"]
+      "3": ["0", "1", "2"]
+      "4": ["0", "1", "2", "3"]
+      "5": ["0", "1", "2", "3", "4"]
+      "6": ["0", "1", "2", "3", "4", "5"]
+      "7": ["0", "1", "2", "3", "4", "5", "6"]
+      "8": ["0", "1", "2", "3", "4", "5", "6", "7"]
+  AvailabilityZones:
+    us-east-1:
+      "0": "us-east-1a"
+      "1": "us-east-1b"
+      "2": "us-east-1c"
+      "3": "us-east-1d"
+      "4": "us-east-1e"
+      "5": "us-east-1f"
+      "6": "us-east-1a"
+      "7": "us-east-1b"
 
 Resources:
   SecurityGroup:
@@ -138,137 +135,109 @@ Resources:
         IpProtocol: -1
         SourceSecurityGroupId: !GetAtt [ SecurityGroup, GroupId ]
         GroupId: !GetAtt [ SecurityGroup, GroupId ]
+          
+  'Fn::ForEach::ComputeNodes':
+    - InstanceID
+    - !FindInMap [ComputeNodesData, Identifiers, !Ref ComputeNodesAmount]
+    - 'ComputeNode${InstanceID}':
+        Type: AWS::EC2::Instance
+        DependsOn: HeadNode
+        Properties:
+          ImageId: !Ref LatestAmiId
+          InstanceType: !Ref ComputeNodeInstanceType
+          IamInstanceProfile: LabInstanceProfile
+          KeyName: !Ref KeyPair
+          SecurityGroupIds:
+            - !GetAtt [SecurityGroup, GroupId]
+          AvailabilityZone: !If
+            - IsHPCCluster
+            - !Ref HeadNodeAZ
+            - !FindInMap [ AvailabilityZones, us-east-1, !Ref InstanceID]
+          Tags:
+            - Key: Name
+              Value: !Join [ "-", [ !Ref AWS::StackName, !Join [ "", [ "cn", !Ref InstanceID ]]]]
+          UserData:
+            Fn::Base64: !Sub |
+                #!/bin/bash -x
+                # Install packages
+                yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+                yum install munge munge-libs munge-devel -y
+                yum install openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
 
-  ComputeNodePolicy:
-    Type: AWS::IAM::Policy
-    Condition: CreateNodePolicies
-    DeletionPolicy: Retain
-    Properties:
-      PolicyName: SlurmPluginComputeNodePolicy
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: ec2:DescribeTags
-            Resource: '*'
-      Roles:
-        - LabRole
+                # Configure Munge
+                echo "welcometoslurmamazonuserwelcometoslurmamazonuserwelcometoslurmamazonuser" | tee /etc/munge/munge.key
+                chown munge:munge /etc/munge/munge.key
+                chmod 600 /etc/munge/munge.key
+                chown -R munge /etc/munge/ /var/log/munge/
+                chmod 0700 /etc/munge/ /var/log/munge/
+                systemctl enable munge
+                systemctl start munge
+                sleep 15
 
-  ComputeNodeInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - LabRole
+                # Install OpenMPI
+                yum install -y openmpi openmpi-devel
 
-  HeadNodePolicy:
-    Type: AWS::IAM::Policy
-    Condition: CreateNodePolicies
-    DeletionPolicy: Retain
-    Properties:
-      PolicyName: SlurmPluginHeadNodePolicy
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: 
-              - ec2:CreateFleet
-              - ec2:RunInstances
-              - ec2:TerminateInstances
-              - ec2:CreateTags
-              - ec2:DescribeInstances
-              - iam:CreateServiceLinkedRole
-            Resource: '*'
-          - Effect: Allow
-            Action: iam:PassRole
-            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole' 
-      Roles:
-        - LabRole
+                # Mount NFS share
+                mkdir -p /nfs
+                mount -t nfs ${HeadNode.PrivateIp}:/nfs /nfs
+                echo "${HeadNode.PrivateIp}:/nfs /nfs nfs rw,nosuid 0 0" >> /etc/fstab
+                export SLURM_HOME=/nfs/slurm
 
-  HeadNodeInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - LabRole
+                # Set environment variables
+                echo 'export SLURM_HOME=/nfs/slurm' | tee /etc/profile.d/slurm.sh
+                echo 'export SLURM_CONF=$SLURM_HOME/etc/slurm.conf' | tee -a /etc/profile.d/slurm.sh
+                echo 'export SLURM_NODENAME=cn${InstanceID}' | tee -a /etc/profile.d/slurm.sh
+                echo 'export PATH=/nfs/slurm/bin:$PATH' | tee -a /etc/profile.d/slurm.sh
 
-  HeadNodeNetworkInterface:
-    Type: AWS::EC2::NetworkInterface
-    Properties: 
-      GroupSet: 
-        - !GetAtt [ SecurityGroup, GroupId ]
-      SubnetId: !Ref HeadNodeSubnetId
-
-  LaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateData:
-        KeyName: !Ref KeyPair
-        ImageId: !Ref LatestAmiId
-        IamInstanceProfile:
-          Arn: !GetAtt [ ComputeNodeInstanceProfile, Arn ]
-        SecurityGroupIds:
-          - !GetAtt [ SecurityGroup, GroupId ]
-        UserData:
-          Fn::Base64:
-            !Sub |
-              #!/bin/bash -x
-              yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
-              yum install munge munge-libs munge-devel -y
-
-              echo "welcometoslurmamazonuserwelcometoslurmamazonuserwelcometoslurmamazonuser" | tee /etc/munge/munge.key
-              chown munge:munge /etc/munge/munge.key
-              chmod 600 /etc/munge/munge.key
-              chown -R munge /etc/munge/ /var/log/munge/
-              chmod 0700 /etc/munge/ /var/log/munge/
-              systemctl enable munge
-              systemctl start munge
-              sleep 15
-
-              yum install openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
-              # Install OpenMPI
-              yum install -y openmpi openmpi-devel
-
-              mkdir -p /nfs
-              mount -t nfs ${HeadNodeNetworkInterface.PrimaryPrivateIpAddress}:/nfs /nfs
-              export SLURM_HOME=/nfs/slurm
-
-              mkdir -p /var/spool/slurm
-              'cp' $SLURM_HOME/etc/slurm/slurmd.service /lib/systemd/system
-              systemctl enable slurmd.service
-              systemctl start slurmd.service
-
-  HeadNodeInstance:
+                # Launch Slurmd
+                mkdir -p /var/spool/slurm
+                sed "s|@SLURM_NODENAME@|cn${InstanceID}|" $SLURM_HOME/etc/slurm/slurmd.service > /lib/systemd/system/slurmd.service
+                systemctl enable slurmd.service
+                systemctl start slurmd.service
+                                          
+                /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ComputeNode${InstanceID} --region ${AWS::Region}
+        CreationPolicy:
+          ResourceSignal:
+            Timeout: PT5M
+        
+  HeadNode:
     Type: AWS::EC2::Instance
-    Properties: 
+#    Condition: Never
+    Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref HeadNodeInstanceType
-      IamInstanceProfile: !Ref HeadNodeInstanceProfile
+      IamInstanceProfile: LabInstanceProfile
       KeyName:  !Ref KeyPair
-      NetworkInterfaces: 
-        - NetworkInterfaceId: !Ref HeadNodeNetworkInterface
-          DeviceIndex: 0
+      SecurityGroupIds:
+        - !GetAtt [ SecurityGroup, GroupId ]
+      AvailabilityZone: !Ref HeadNodeAZ
       Tags:
         - Key: Name
-          Value: !Join [ "-", [ !Ref AWS::StackName, "headnode" ] ]
+          Value: !Join [ "-", [ !Ref AWS::StackName, "headnode" ]]
       UserData: 
-        Fn::Base64:
-          !Sub
-            - |
+        Fn::Base64: !Sub |
               #!/bin/bash -x
               # Install packages
               yum update -y
-              yum install nfs-utils python2 python2-pip python3 python3-pip -y
+              yum install nfs-utils -y
               yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
-              yum install munge munge-libs munge-devel openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
+              yum install munge munge-libs munge-devel -y
+              yum install openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
               yum groupinstall "Development Tools" -y
-              pip3 install boto3
-              pip3 install awscli
 
+              # Install OpenMPI
+              yum install -y openmpi openmpi-devel
+              
               # Configure NFS share
               mkdir -p /nfs
               echo "/nfs *(rw,async,no_subtree_check,no_root_squash)" | tee /etc/exports
               systemctl enable nfs
               systemctl start nfs
               exportfs -av
+              
+              # OpenMPI shared folder in NFS
+              mkdir /nfs/mpi
+              chmod 777 /nfs/mpi
 
               # Configure Munge
               echo "welcometoslurmamazonuserwelcometoslurmamazonuserwelcometoslurmamazonuser" | tee /etc/munge/munge.key
@@ -293,60 +262,10 @@ Resources:
               mkdir -p $SLURM_HOME/etc/slurm
               'cp' /home/ec2-user/slurm-*/etc/* $SLURM_HOME/etc/slurm
 
-              # Install OpenMPI
-              yum install -y openmpi openmpi-devel
-              # OpenMPI shared folder in NFS
-              mkdir /nfs/mpi
-              chmod 777 /nfs/mpi
-
-              # Install plugin
-              mkdir -p $SLURM_HOME/etc/aws
-              cd $SLURM_HOME/etc/aws
-              wget -q ${PluginPrefixUrl}common.py
-              wget -q ${PluginPrefixUrl}resume.py
-              wget -q ${PluginPrefixUrl}suspend.py
-              wget -q ${PluginPrefixUrl}generate_conf.py
-              wget -q ${PluginPrefixUrl}change_state.py 
-              chmod +x *.py
-
-              cat > $SLURM_HOME/etc/aws/config.json <<EOF
-              {
-                 "LogLevel": "INFO",
-                 "LogFileName": "/var/log/slurm_plugin.log",
-                 "SlurmBinPath": "$SLURM_HOME/bin",
-                 "SlurmConf": {
-                    "PrivateData": "CLOUD",
-                    "ResumeProgram": "$SLURM_HOME/etc/aws/resume.py",
-                    "SuspendProgram": "$SLURM_HOME/etc/aws/suspend.py",
-                    "ResumeRate": 100,
-                    "SuspendRate": 100,
-                    "ResumeTimeout": 300,
-                    "SuspendTime": 350,
-                    "TreeWidth": 60000
-                 }
-              }
-              EOF
-
-              cat > $SLURM_HOME/etc/aws/partitions.json <<'EOF'
-              {
-                 "Partitions": [
-                   {
-                       "PartitionName": "aws",
-                       "NodeGroups": [
-                         ${NodeGroups}
-                       ],
-                       "PartitionOptions": {
-                          "Default": "Yes"
-                       }
-                   }
-                 ]
-              }
-              EOF
-
               cat > $SLURM_HOME/etc/slurm.conf <<'EOF'
-              ClusterName=amazon
+              ClusterName=${AWS::StackName}
               ControlMachine=@HEADNODE@
-              ControlAddr=${HeadNodeNetworkInterface.PrimaryPrivateIpAddress}
+              ControlAddr=@HEADPRIVATEIP@
               SlurmdUser=root
               SlurmctldPort=6817
               SlurmdPort=6818
@@ -368,7 +287,7 @@ Resources:
               Waittime=0
               # SCHEDULING
               SchedulerType=sched/backfill
-              SelectType=select/cons_res
+              SelectType=select/cons_tres
               SelectTypeParameters=CR_Core
               # LOGGING
               SlurmctldDebug=3
@@ -377,35 +296,13 @@ Resources:
               SlurmdLogFile=/var/log/slurmd.log
               DebugFlags=NO_CONF_HASH
               JobCompType=jobcomp/none
+              # DYNAMIC COMPUTE NODES
+              MaxNodeCount=8
+              TreeWidth=65533
+              PartitionName=aws Nodes=ALL Default=YES MaxTime=INFINITE State=UP
               EOF
-              sed -i "s|@HEADNODE@|$HOSTNAME|g" $SLURM_HOME/etc/slurm.conf
-
-              # Configure the plugin
-              $SLURM_HOME/etc/aws/generate_conf.py
-              cat $SLURM_HOME/etc/aws/slurm.conf.aws >> $SLURM_HOME/etc/slurm.conf
-
-              crontab -l > mycron
-              cat > mycron <<EOF
-              * * * * * $SLURM_HOME/etc/aws/change_state.py &>/dev/null
-              EOF
-              crontab mycron
-              rm mycron
-
-              # Get dynamically the node name when launching slurmd
-              cat > $SLURM_HOME/etc/aws/get_nodename <<'EOF'
-              instanceid=`/usr/bin/curl --fail -m 2 -s 169.254.169.254/latest/meta-data/instance-id`
-              if [[ ! -z "$instanceid" ]]; then
-                 region=`/usr/bin/curl -s 169.254.169.254/latest/meta-data/placement/availability-zone`
-                 region=${!region::-1}
-                 hostname=`/usr/bin/aws ec2 describe-tags --filters "Name=resource-id,Values=$instanceid" "Name=key,Values=Name" --region $region --query "Tags[0].Value" --output=text`
-              fi
-              if [ ! -z "$hostname" -a "$hostname" != "None" ]; then
-                 echo $hostname
-              else
-                 echo `hostname`
-              fi
-              EOF
-              chmod +x $SLURM_HOME/etc/aws/get_nodename
+              HOSTIP=`hostname -s | cut -c 4- | sed s'/-/./g'`
+              sed -i -e "s|@HEADNODE@|$HOSTNAME|" -e "s|@HEADPRIVATEIP@|$HOSTIP|" $SLURM_HOME/etc/slurm.conf
 
               cat > $SLURM_HOME/etc/slurm/slurmd.service <<EOF
               [Unit]
@@ -414,8 +311,7 @@ Resources:
               [Service]
               Type=forking
               EnvironmentFile=-/etc/sysconfig/slurmd
-              ExecStartPre=/bin/bash -c "/bin/systemctl set-environment SLURM_NODENAME=\$($SLURM_HOME/etc/aws/get_nodename)"
-              ExecStart=/nfs/slurm/sbin/slurmd -N \$SLURM_NODENAME \$SLURMD_OPTIONS
+              ExecStart=/nfs/slurm/sbin/slurmd -N @SLURM_NODENAME@ -Z -vv
               ExecReload=/bin/kill -HUP \$MAINPID
               PIDFile=/var/run/slurmd.pid
               KillMode=process
@@ -435,7 +331,7 @@ Resources:
               [Service]
               Type=forking
               EnvironmentFile=-/etc/sysconfig/slurmctld
-              ExecStart=/nfs/slurm/sbin/slurmctld \$SLURMCTLD_OPTIONS
+              ExecStart=/nfs/slurm/sbin/slurmctld -vv
               ExecReload=/bin/kill -HUP \$MAINPID
               PIDFile=/var/run/slurmctld.pid
               LimitNOFILE=65536
@@ -455,210 +351,13 @@ Resources:
               systemctl enable slurmctld
               systemctl start slurmctld
 
-              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource HeadNodeInstance --region ${AWS::Region}
-            - NodeGroups:
-                !Join
-                  - ','
-                  - - !Sub
-                        - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone1",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                              }
-                        - NumberOfNodes: !If [ OneSubnet, 8, 1 ]
-                          Weight: 1
-                          SubnetId: !Select [ 0, !Ref ComputeNodeSubnetIds ]
-                    - !If
-                      - OneSubnet
-                      - !Ref AWS::NoValue
-                      - !Sub
-                          - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone2",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                               }
-                          - NumberOfNodes: !If [ TwoSubnets, 7, 1 ]
-                            Weight: !If [ TwoSubnets, 2, 1 ]
-                            SubnetId: !Select [ 1, !Ref ComputeNodeSubnetIds ]
-                    - !If
-                      - LessThanThreeSubnets
-                      - !Ref AWS::NoValue
-                      - !Sub
-                          - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone3",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                               }
-                          - NumberOfNodes: !If [ ThreeSubnets, 6, 1 ]
-                            Weight: !If [ ThreeSubnets, 2, 1 ]
-                            SubnetId: !Select [ 2, !Ref ComputeNodeSubnetIds ]
-                    - !If
-                      - LessThanFourSubnets
-                      - !Ref AWS::NoValue
-                      - !Sub
-                          - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone4",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                               }
-                          - NumberOfNodes: !If [ FourSubnets, 5, 1 ]
-                            Weight: !If [ FourSubnets, 2, 1 ]
-                            SubnetId: !Select [ 3, !Ref ComputeNodeSubnetIds ]
-                    - !If
-                      - LessThanFiveSubnets
-                      - !Ref AWS::NoValue
-                      - !Sub
-                          - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone5",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                               }
-                          - NumberOfNodes: !If [ FiveSubnets, 4, 2 ]
-                            Weight: 2
-                            SubnetId: !Select [ 4, !Ref ComputeNodeSubnetIds ]
-                    - !If
-                      - NotSixSubnets
-                      - !Ref AWS::NoValue
-                      - !Sub
-                          - |
-                              {
-                                  "NodeGroupName": "${AWS::StackName}NodeZone6",
-                                  "MaxNodes": ${NumberOfNodes},
-                                  "Region": "${AWS::Region}",
-                                  "SlurmSpecifications": {
-                                     "CPUs": "${ComputeNodeCPUs}",
-                                     "Weight": "${Weight}"
-                                  },
-                                  "PurchasingOption": "on-demand",
-                                  "OnDemandOptions": {
-                                      "AllocationStrategy": "lowest-price"
-                                  },
-                                  "LaunchTemplateSpecification": {
-                                     "LaunchTemplateId": "${LaunchTemplate}",
-                                     "Version": "$Latest"
-                                  },
-                                  "LaunchTemplateOverrides": [
-                                     {
-                                        "InstanceType": "${ComputeNodeInstanceType}"
-                                     }
-                                  ],
-                                  "SubnetIds": [
-                                     "${SubnetId}"
-                                  ]
-                               }
-                          - NumberOfNodes: 2
-                            Weight: 3
-                            SubnetId: !Select [ 5, !Ref ComputeNodeSubnetIds ]
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource HeadNode --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
-        Timeout: PT15M
-
+        Timeout: PT10M
+        
 Outputs:
   HeadNodeId:
     Description: Head node instance ID
-    Value: !Ref HeadNodeInstance
+    Value: !Ref HeadNode
+#    Condition: Never
