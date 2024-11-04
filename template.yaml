@@ -160,7 +160,8 @@ Resources:
             Fn::Base64: !Sub |
                 #!/bin/bash -x
                 # Install packages
-                yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+                #yum update -y
+                amazon-linux-extras install epel -y
                 yum install munge munge-libs munge-devel -y
                 yum install openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
 
@@ -220,7 +221,7 @@ Resources:
               # Install packages
               yum update -y
               yum install nfs-utils -y
-              yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+              amazon-linux-extras install epel -y
               yum install munge munge-libs munge-devel -y
               yum install openssl openssl-devel pam-devel numactl numactl-devel hwloc hwloc-devel lua lua-devel readline-devel rrdtool-devel ncurses-devel man2html libibmad libibumad rpm-build -y
               yum groupinstall "Development Tools" -y
